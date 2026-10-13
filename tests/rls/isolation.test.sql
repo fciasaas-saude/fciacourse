@@ -1,72 +1,204 @@
 -- TESTES RLS: Isolamento Multi-Tenant e Permissões (Fase 1)
 -- Executar em ambiente development com migrations aplicadas e seed.sql carregado.
 -- NUNCA executar em produção ou staging.
+--
+-- ESTRATÉGIA DE ROLES:
+-- - Anônimo: SET LOCAL ROLE anon;
+-- - Autenticado: SET LOCAL ROLE authenticated; + set_config('request.jwt.claims', ...)
+-- - Service account: SET LOCAL ROLE service_role;
+-- - Cada teste roda em transação isolada (BEGIN; ... ROLLBACK;)
+-- - IDs são fictícios e vêm do seed manual; usuários correspondentes devem existir em auth.users
+-- - SQL Editor administrativo ignora RLS; use psql ou endpoint PostgREST para validar acesso real
 
 -- =============================================================================
 -- TESTE 1: Organização A não lê dados da Organização B
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000001"}';
-SELECT count(*) FROM public.organizations; -- Esperado: 1 (Org A)
-SELECT * FROM public.organization_members WHERE organization_id = 'a0000000-0000-0000-0000-000000000002'; -- Esperado: 0 linhas
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
+SELECT count(*) AS org_count FROM public.organizations;
+-- Esperado: 1 (apenas Org A)
+
+SELECT count(*) AS cross_org_members FROM public.organization_members
+WHERE organization_id = 'a0000000-0000-0000-0000-000000000002';
+-- Esperado: 0 (membro da Org A não vê membros da Org B)
+ROLLBACK;
 
 -- =============================================================================
 -- TESTE 2: Usuário comum NÃO pode criar sua própria membership
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000003"}'; -- student da Org A
-INSERT INTO public.organization_members (user_id, organization_id, role)
-VALUES ('00000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', 'editor');
--- Esperado: ERRO de RLS (policy violation) — usuário comum não pode inserir membership
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+DO $$
+BEGIN
+    INSERT INTO public.organization_members (user_id, organization_id, role)
+    VALUES ('00000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', 'editor');
+    RAISE EXCEPTION 'RLS FAIL: user should not be able to self-insert membership';
+EXCEPTION WHEN insufficient_privilege OR check_violation THEN
+    RAISE NOTICE 'TEST 2 PASSED: auto-membership blocked';
+END;
+$$;
+ROLLBACK;
 
 -- =============================================================================
 -- TESTE 3: Usuário comum NÃO pode se promover a super_admin
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000003"}';
-UPDATE public.organization_members SET role = 'super_admin'
-WHERE user_id = '00000000-0000-0000-0000-000000000003' AND organization_id = 'a0000000-0000-0000-0000-000000000001';
--- Esperado: ERRO de RLS — apenas super_admin pode atualizar memberships
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+DO $$
+BEGIN
+    UPDATE public.organization_members SET role = 'super_admin'
+    WHERE user_id = '00000000-0000-0000-0000-000000000003'
+      AND organization_id = 'a0000000-0000-0000-0000-000000000001';
+    IF FOUND THEN
+        RAISE EXCEPTION 'RLS FAIL: user should not be able to promote self';
+    END IF;
+    RAISE NOTICE 'TEST 3 PASSED: self-promotion blocked (0 rows updated)';
+END;
+$$;
+ROLLBACK;
 
 -- =============================================================================
--- TESTE 4: Usuário comum NÃO pode criar membership em outra organização
+-- TESTE 4: Editor da Org B NÃO pode inserir membership na Org A
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000001"}'; -- super_admin Org A
--- Super_admin PODE inserir em qualquer org (comportamento esperado)
--- Mas editor da Org B NÃO pode inserir na Org A:
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000002"}'; -- editor Org B
-INSERT INTO public.organization_members (user_id, organization_id, role)
-VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', 'student');
--- Esperado: ERRO de RLS — editor não tem permissão INSERT
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
+
+DO $$
+BEGIN
+    INSERT INTO public.organization_members (user_id, organization_id, role)
+    VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', 'student');
+    RAISE EXCEPTION 'RLS FAIL: editor of Org B should not insert into Org A';
+EXCEPTION WHEN insufficient_privilege OR check_violation THEN
+    RAISE NOTICE 'TEST 4 PASSED: cross-org membership insert blocked';
+END;
+$$;
+ROLLBACK;
 
 -- =============================================================================
 -- TESTE 5: Usuário anônimo não lê tabelas privadas
 -- =============================================================================
-RESET ROLE;
-SELECT * FROM public.organizations LIMIT 1; -- Esperado: 0 linhas ou ERRO
-SELECT * FROM public.ai_jobs LIMIT 1; -- Esperado: 0 linhas ou ERRO
+BEGIN;
+SET LOCAL ROLE anon;
+
+SELECT count(*) AS anon_orgs FROM public.organizations;
+-- Esperado: 0
+
+SELECT count(*) AS anon_jobs FROM public.ai_jobs;
+-- Esperado: 0
+
+SELECT count(*) AS anon_profiles FROM public.profiles;
+-- Esperado: 0
+ROLLBACK;
 
 -- =============================================================================
 -- TESTE 6: ai_jobs é isolado por organization_id
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000001"}';
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
 INSERT INTO public.ai_jobs (organization_id, job_type, idempotency_key, payload)
-VALUES ('a0000000-0000-0000-0000-000000000001', 'test_job', 'key_iso_1', '{}');
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000002"}'; -- Org B
-SELECT * FROM public.ai_jobs WHERE idempotency_key = 'key_iso_1'; -- Esperado: 0 linhas
+VALUES ('a0000000-0000-0000-0000-000000000001', 'test_job', 'key_iso_test_6', '{}');
+
+-- Trocar para usuário da Org B
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
+
+SELECT count(*) AS cross_org_jobs FROM public.ai_jobs
+WHERE idempotency_key = 'key_iso_test_6';
+-- Esperado: 0 (Org B não vê job da Org A)
+ROLLBACK;
 
 -- =============================================================================
 -- TESTE 7: Cliente não altera ou exclui audit_logs
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000001"}';
+BEGIN;
+-- Inserir log como super_admin
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
 INSERT INTO public.audit_logs (organization_id, user_id, action, entity_type)
-VALUES ('a0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003', 'test_action', 'test_entity');
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000003"}'; -- student
-DELETE FROM public.audit_logs WHERE action = 'test_action'; -- Esperado: ERRO ou 0 linhas
-UPDATE public.audit_logs SET metadata = '{"hacked": true}' WHERE action = 'test_action'; -- Esperado: ERRO ou 0 linhas
+VALUES ('a0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003', 'test_action_7', 'test_entity');
+
+-- Tentar deletar como student
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+DO $$
+BEGIN
+    DELETE FROM public.audit_logs WHERE action = 'test_action_7';
+    IF FOUND THEN
+        RAISE EXCEPTION 'RLS FAIL: student should not delete audit_logs';
+    END IF;
+    RAISE NOTICE 'TEST 7a PASSED: audit_log delete blocked for non-admin';
+END;
+$$;
+
+-- Tentar atualizar como student
+DO $$
+BEGIN
+    UPDATE public.audit_logs SET metadata = '{"hacked":true}' WHERE action = 'test_action_7';
+    IF FOUND THEN
+        RAISE EXCEPTION 'RLS FAIL: student should not update audit_logs';
+    END IF;
+    RAISE NOTICE 'TEST 7b PASSED: audit_log update blocked for non-admin';
+END;
+$$;
+ROLLBACK;
 
 -- =============================================================================
--- TESTE 8: Funções auxiliares RLS respeitam associação correta
+-- TESTE 8: Funções auxiliares RLS retornam valores corretos
 -- =============================================================================
-SET request.jwt.claims = '{"sub": "00000000-0000-0000-0000-000000000001"}';
-SELECT public.is_super_admin('00000000-0000-0000-0000-000000000001'); -- TRUE
-SELECT public.is_super_admin('00000000-0000-0000-0000-000000000002'); -- FALSE
-SELECT public.is_member_of_org('00000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001'); -- TRUE
-SELECT public.is_member_of_org('00000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000002'); -- FALSE
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
+SELECT public.is_super_admin('00000000-0000-0000-0000-000000000001') AS test_8a;
+-- Esperado: TRUE
+
+SELECT public.is_super_admin('00000000-0000-0000-0000-000000000002') AS test_8b;
+-- Esperado: FALSE
+
+SELECT public.is_member_of_org('00000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001') AS test_8c;
+-- Esperado: TRUE
+
+SELECT public.is_member_of_org('00000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000002') AS test_8d;
+-- Esperado: FALSE
+ROLLBACK;
+
+-- =============================================================================
+-- TESTE 9: Service account pode inserir jobs na própria org
+-- =============================================================================
+BEGIN;
+SET LOCAL ROLE service_role;
+
+INSERT INTO public.ai_jobs (organization_id, job_type, idempotency_key, payload)
+VALUES ('a0000000-0000-0000-0000-000000000001', 'service_test', 'key_svc_test_9', '{}');
+
+SELECT count(*) AS svc_job_count FROM public.ai_jobs
+WHERE idempotency_key = 'key_svc_test_9';
+-- Esperado: 1
+ROLLBACK;
+
+-- =============================================================================
+-- TESTE 10: Super admin pode gerenciar memberships em qualquer org
+-- =============================================================================
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
+INSERT INTO public.organization_members (user_id, organization_id, role)
+VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000002', 'researcher');
+
+SELECT count(*) AS sa_cross_insert FROM public.organization_members
+WHERE user_id = '00000000-0000-0000-0000-000000000004'
+  AND organization_id = 'a0000000-0000-0000-0000-000000000002';
+-- Esperado: 1 (super_admin pode inserir em qualquer org)
+ROLLBACK;
