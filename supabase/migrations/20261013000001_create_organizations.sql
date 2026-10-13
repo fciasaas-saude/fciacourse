@@ -20,14 +20,10 @@ CREATE OR REPLACE TRIGGER organizations_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION public.set_updated_at();
 
--- RLS: super_admin tem acesso total
--- NOTA: Policy de leitura para membros será criada na migration 0002
--- após a criação da tabela organization_members e funções auxiliares
-CREATE POLICY "super_admin_full_access_organizations"
-    ON public.organizations
-    FOR ALL
-    USING (public.is_super_admin(auth.uid()))
-    WITH CHECK (public.is_super_admin(auth.uid()));
+-- NOTA: Todas as policies de organizations são criadas na migration 0002
+-- após a criação das funções auxiliares (is_super_admin, is_member_of_org)
+-- e da tabela organization_members. Nenhuma policy é definida aqui para
+-- evitar dependência antecipada de objetos que ainda não existem.
 
 -- NOTA: Dados de teste foram movidos para supabase/seed.sql
 -- Esta migration contém APENAS schema estrutural. Nenhum dado é inserido automaticamente.

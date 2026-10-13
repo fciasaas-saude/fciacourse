@@ -181,9 +181,19 @@ CREATE POLICY "super_admin_delete_org_members"
     USING (public.is_super_admin(auth.uid()));
 
 -- =============================================================================
--- RLS: organizations (policy movida da migration 0001)
--- Agora que organization_members e is_member_of_org existem, a policy é segura.
+-- RLS: organizations (policies movidas da migration 0001)
+-- Agora que organization_members, is_super_admin e is_member_of_org existem,
+-- as policies são seguras. Nenhuma policy de organizations permanece em 0001.
 -- =============================================================================
+
+-- super_admin tem acesso total a qualquer organização
+CREATE POLICY "super_admin_full_access_organizations"
+    ON public.organizations
+    FOR ALL
+    USING (public.is_super_admin(auth.uid()))
+    WITH CHECK (public.is_super_admin(auth.uid()));
+
+-- Membros leem apenas a própria organização
 CREATE POLICY "members_read_own_organization"
     ON public.organizations FOR SELECT
     USING (
