@@ -11,10 +11,10 @@ Criar o primeiro usuário administrador e a primeira organização de forma segu
 ## ⚠️ Regras Críticas
 
 - **NUNCA** execute este procedimento em produção ou staging sem aprovação explícita.
-- **NUNCA** use UUIDs reais neste documento como valores fixos; todos são placeholders.
 - **NENHUM** script automático deve executar estes comandos.
 - **NENHUMA** policy aberta ou permissiva deve ser criada temporariamente.
 - O procedimento é **manual e auditável**.
+- **O SQL Editor administrativo usa privilégios elevados e não serve para validar RLS de usuários finais.** Validações de acesso real devem ser feitas via aplicação autenticada ou endpoint PostgREST com JWT válido.
 
 ---
 
@@ -25,10 +25,7 @@ Criar o primeiro usuário administrador e a primeira organização de forma segu
 3. Preencha email e senha do primeiro administrador.
 4. Confirme que o usuário foi criado e copie o **UUID** gerado.
 
-```
--- Placeholder: substitua pelo UUID real obtido no dashboard
-SET @first_admin_uuid = '<ADMIN_UUID_AQUI>';
-```
+> Substitua `<ADMIN_UUID>` pelo UUID real obtido no dashboard em todos os comandos abaixo.
 
 ## Passo 2: Criar Primeira Organização
 
@@ -40,18 +37,13 @@ VALUES ('FCIA', 'fcia')
 ON CONFLICT (slug) DO NOTHING;
 ```
 
-Confirme a criação:
+Confirme a criação e copie o `id` retornado:
 
 ```sql
 SELECT id, name, slug FROM public.organizations WHERE slug = 'fcia';
 ```
 
-Copie o `id` da organização retornada.
-
-```
--- Placeholder: substitua pelo ID real da organização
-SET @fcia_org_id = '<ORG_UUID_AQUI>';
-```
+> Substitua `<ORG_UUID>` pelo ID real da organização em todos os comandos abaixo.
 
 ## Passo 3: Inserir Membership de Super Admin
 
@@ -59,7 +51,7 @@ Execute no SQL Editor:
 
 ```sql
 INSERT INTO public.organization_members (user_id, organization_id, role, joined_at)
-VALUES (@first_admin_uuid, @fcia_org_id, 'super_admin', now())
+VALUES ('<ADMIN_UUID>', '<ORG_UUID>', 'super_admin', now())
 ON CONFLICT (user_id, organization_id) DO NOTHING;
 ```
 
@@ -70,7 +62,7 @@ SELECT om.role, p.display_name, o.name
 FROM public.organization_members om
 JOIN public.profiles p ON p.id = om.user_id
 JOIN public.organizations o ON o.id = om.organization_id
-WHERE om.user_id = @first_admin_uuid;
+WHERE om.user_id = '<ADMIN_UUID>';
 -- Esperado: role = 'super_admin'
 ```
 
@@ -79,11 +71,11 @@ WHERE om.user_id = @first_admin_uuid;
 ```sql
 INSERT INTO public.audit_logs (organization_id, user_id, action, entity_type, entity_id, metadata)
 VALUES (
-    @fcia_org_id,
-    @first_admin_uuid,
+    '<ORG_UUID>',
+    '<ADMIN_UUID>',
     'bootstrap_first_super_admin',
     'organization_members',
-    @first_admin_uuid,
+    '<ADMIN_UUID>',
     '{"reason": "Initial system bootstrap", "performed_by": "manual_runbook"}'::jsonb
 );
 ```
@@ -95,31 +87,46 @@ Execute todas as consultas abaixo e confirme os resultados esperados:
 | # | Consulta | Resultado Esperado |
 |---|---|---|
 | 1 | `SELECT count(*) FROM public.organizations;` | ≥ 1 |
-| 2 | `SELECT role FROM public.organization_members WHERE user_id = @first_admin_uuid AND organization_id = @fcia_org_id;` | `super_admin` |
-| 3 | `SELECT is_super_admin(@first_admin_uuid);` | `true` |
+| 2 | `SELECT role FROM public.organization_members WHERE user_id = '<ADMIN_UUID>' AND organization_id = '<ORG_UUID>';` | `super_admin` |
+| 3 | `SELECT is_super_admin('<ADMIN_UUID>');` | `true` |
 | 4 | `SELECT count(*) FROM public.audit_logs WHERE action = 'bootstrap_first_super_admin';` | ≥ 1 |
-| 5 | Tentar INSERT em organization_members com um usuário diferente e sem ser super_admin | ERRO de RLS |
+| 5 | Tentar INSERT em organization_members com um usuário diferente e sem ser super_admin (via aplicação ou PostgREST) | ERRO de RLS |
 
 ## Rollback Manual
 
-Se algo der errado durante o bootstrap:
+Audit logs são **append-only**. Em caso de rollback ou correção, **não delete registros de auditoria**. Registre uma nova entrada indicando a reversão.
+
+### 1. Registrar reversão em audit_logs
 
 ```sql
--- Remover membership (mantém usuário e org intactos)
-DELETE FROM public.organization_members
-WHERE user_id = @first_admin_uuid AND organization_id = @fcia_org_id;
-
--- Remover logs de bootstrap (opcional)
-DELETE FROM public.audit_logs
-WHERE action = 'bootstrap_first_super_admin'
-AND user_id = @first_admin_uuid;
-
--- Remover organização (apenas se não houver outros membros)
-DELETE FROM public.organizations WHERE id = @fcia_org_id
-AND NOT EXISTS (
-    SELECT 1 FROM public.organization_members WHERE organization_id = @fcia_org_id
+INSERT INTO public.audit_logs (organization_id, user_id, action, entity_type, entity_id, metadata)
+VALUES (
+    '<ORG_UUID>',
+    '<ADMIN_UUID>',
+    'bootstrap_rollback',
+    'organization_members',
+    '<ADMIN_UUID>',
+    '{"reason": "Bootstrap reverted due to <MOTIVO>", "performed_by": "manual_runbook"}'::jsonb
 );
 ```
+
+### 2. Remover membership
+
+```sql
+DELETE FROM public.organization_members
+WHERE user_id = '<ADMIN_UUID>' AND organization_id = '<ORG_UUID>';
+```
+
+### 3. Remover organização (apenas se não houver outros membros)
+
+```sql
+DELETE FROM public.organizations WHERE id = '<ORG_UUID>'
+AND NOT EXISTS (
+    SELECT 1 FROM public.organization_members WHERE organization_id = '<ORG_UUID>'
+);
+```
+
+> **Nota:** Os registros de `bootstrap_first_super_admin` e `bootstrap_rollback` permanecem em `audit_logs` como trilha de auditoria permanente.
 
 ## Checklist de Confirmação
 
@@ -127,11 +134,12 @@ AND NOT EXISTS (
 - [ ] Organização criada com slug único
 - [ ] Membership inserida com role `super_admin`
 - [ ] `is_super_admin()` retorna `true` para o usuário
-- [ ] Audit log registrado
+- [ ] Audit log de bootstrap registrado
 - [ ] Nenhum outro usuário tem acesso à organização
 - [ ] Nenhuma policy aberta foi criada
-- [ ] Auto-membership continua bloqueada (teste negativo passou)
+- [ ] Auto-membership continua bloqueada (teste negativo passou via aplicação/PostgREST)
 - [ ] Valores reais foram usados apenas no SQL Editor, nunca versionados
+- [ ] SQL Editor administrativo não foi usado para validar RLS de usuário final
 
 ---
 

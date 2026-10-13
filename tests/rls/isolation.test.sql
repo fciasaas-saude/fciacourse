@@ -2,6 +2,11 @@
 -- Executar em ambiente development com migrations aplicadas e seed.sql carregado.
 -- NUNCA executar em produção ou staging.
 --
+-- ⚠️ AVISO IMPORTANTE:
+-- Cenários que deliberadamente geram erro devem ser executados
+-- individualmente, pois um erro aborta a transação PostgreSQL.
+-- Não execute este arquivo inteiro de uma vez se incluir cenários de falha.
+--
 -- ESTRATÉGIA DE ROLES:
 -- - Anônimo: SET LOCAL ROLE anon;
 -- - Autenticado: SET LOCAL ROLE authenticated; + set_config('request.jwt.claims', ...)
@@ -27,58 +32,42 @@ ROLLBACK;
 
 -- =============================================================================
 -- TESTE 2: Usuário comum NÃO pode criar sua própria membership
+-- EXECUTAR INDIVIDUALMENTE — esperado: erro de RLS
 -- =============================================================================
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 
-DO $$
-BEGIN
-    INSERT INTO public.organization_members (user_id, organization_id, role)
-    VALUES ('00000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', 'editor');
-    RAISE EXCEPTION 'RLS FAIL: user should not be able to self-insert membership';
-EXCEPTION WHEN insufficient_privilege OR check_violation THEN
-    RAISE NOTICE 'TEST 2 PASSED: auto-membership blocked';
-END;
-$$;
+INSERT INTO public.organization_members (user_id, organization_id, role)
+VALUES ('00000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', 'editor');
+-- Esperado: ERRO de RLS (new row violates row-level security policy)
 ROLLBACK;
 
 -- =============================================================================
 -- TESTE 3: Usuário comum NÃO pode se promover a super_admin
+-- EXECUTAR INDIVIDUALMENTE — esperado: erro de RLS ou 0 linhas afetadas
 -- =============================================================================
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 
-DO $$
-BEGIN
-    UPDATE public.organization_members SET role = 'super_admin'
-    WHERE user_id = '00000000-0000-0000-0000-000000000003'
-      AND organization_id = 'a0000000-0000-0000-0000-000000000001';
-    IF FOUND THEN
-        RAISE EXCEPTION 'RLS FAIL: user should not be able to promote self';
-    END IF;
-    RAISE NOTICE 'TEST 3 PASSED: self-promotion blocked (0 rows updated)';
-END;
-$$;
+UPDATE public.organization_members SET role = 'super_admin'
+WHERE user_id = '00000000-0000-0000-0000-000000000003'
+AND organization_id = 'a0000000-0000-0000-0000-000000000001';
+-- Esperado: ERRO de RLS ou UPDATE 0 (policy impede atualização por não-super_admin)
 ROLLBACK;
 
 -- =============================================================================
 -- TESTE 4: Editor da Org B NÃO pode inserir membership na Org A
+-- EXECUTAR INDIVIDUALMENTE — esperado: erro de RLS
 -- =============================================================================
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
 
-DO $$
-BEGIN
-    INSERT INTO public.organization_members (user_id, organization_id, role)
-    VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', 'student');
-    RAISE EXCEPTION 'RLS FAIL: editor of Org B should not insert into Org A';
-EXCEPTION WHEN insufficient_privilege OR check_violation THEN
-    RAISE NOTICE 'TEST 4 PASSED: cross-org membership insert blocked';
-END;
-$$;
+INSERT INTO public.organization_members (user_id, organization_id, role)
+VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', 'student');
+-- Esperado: ERRO de RLS (editor não tem permissão INSERT em organization_members)
 ROLLBACK;
 
 -- =============================================================================
@@ -117,10 +106,11 @@ WHERE idempotency_key = 'key_iso_test_6';
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 7: Cliente não altera ou exclui audit_logs
+-- TESTE 7a: Cliente não exclui audit_logs
+-- EXECUTAR INDIVIDUALMENTE — esperado: erro de RLS
 -- =============================================================================
 BEGIN;
--- Inserir log como super_admin
+-- Inserir log como super_admin primeiro
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 
@@ -131,26 +121,28 @@ VALUES ('a0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 
-DO $$
-BEGIN
-    DELETE FROM public.audit_logs WHERE action = 'test_action_7';
-    IF FOUND THEN
-        RAISE EXCEPTION 'RLS FAIL: student should not delete audit_logs';
-    END IF;
-    RAISE NOTICE 'TEST 7a PASSED: audit_log delete blocked for non-admin';
-END;
-$$;
+DELETE FROM public.audit_logs WHERE action = 'test_action_7';
+-- Esperado: ERRO de RLS (student não tem permissão DELETE em audit_logs)
+ROLLBACK;
+
+-- =============================================================================
+-- TESTE 7b: Cliente não atualiza audit_logs
+-- EXECUTAR INDIVIDUALMENTE — esperado: erro de RLS
+-- =============================================================================
+BEGIN;
+-- Inserir log como super_admin primeiro
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+
+INSERT INTO public.audit_logs (organization_id, user_id, action, entity_type)
+VALUES ('a0000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003', 'test_action_7b', 'test_entity');
 
 -- Tentar atualizar como student
-DO $$
-BEGIN
-    UPDATE public.audit_logs SET metadata = '{"hacked":true}' WHERE action = 'test_action_7';
-    IF FOUND THEN
-        RAISE EXCEPTION 'RLS FAIL: student should not update audit_logs';
-    END IF;
-    RAISE NOTICE 'TEST 7b PASSED: audit_log update blocked for non-admin';
-END;
-$$;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+UPDATE public.audit_logs SET metadata = '{"hacked":true}' WHERE action = 'test_action_7b';
+-- Esperado: ERRO de RLS (student não tem permissão UPDATE em audit_logs)
 ROLLBACK;
 
 -- =============================================================================
@@ -199,6 +191,6 @@ VALUES ('00000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-0000000
 
 SELECT count(*) AS sa_cross_insert FROM public.organization_members
 WHERE user_id = '00000000-0000-0000-0000-000000000004'
-  AND organization_id = 'a0000000-0000-0000-0000-000000000002';
+AND organization_id = 'a0000000-0000-0000-0000-000000000002';
 -- Esperado: 1 (super_admin pode inserir em qualquer org)
 ROLLBACK;
