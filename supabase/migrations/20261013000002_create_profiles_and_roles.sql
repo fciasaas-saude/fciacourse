@@ -114,15 +114,18 @@ $$;
 COMMENT ON FUNCTION public.handle_new_user() IS
     'SECURITY DEFINER trigger: auto-creates a public.profile row when a new auth.users row is inserted. Fixed search_path = public. Does NOT create organization_members.';
 
--- Revogar execução pública das funções SECURITY DEFINER
+-- Revogar execução pública e de authenticated para impedir invocação direta pelo frontend.
+-- Estas funções são utilizadas exclusivamente por policies RLS e triggers (SECURITY DEFINER),
+-- que executam com privilégios do dono da função, não do usuário autenticado.
+-- NÃO são API pública para clientes.
 REVOKE EXECUTE ON FUNCTION public.is_super_admin(UUID) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.is_super_admin(UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.is_super_admin(UUID) FROM authenticated;
 REVOKE EXECUTE ON FUNCTION public.has_role_in_org(UUID, UUID, public.app_role) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.has_role_in_org(UUID, UUID, public.app_role) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.has_role_in_org(UUID, UUID, public.app_role) FROM authenticated;
 REVOKE EXECUTE ON FUNCTION public.is_member_of_org(UUID, UUID) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.is_member_of_org(UUID, UUID) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.is_member_of_org(UUID, UUID) FROM authenticated;
 REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.handle_new_user() TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM authenticated;
 
 -- =============================================================================
 -- RLS: profiles
