@@ -39,16 +39,6 @@ export default function LoginPage() {
     setLoading(false);
   }
 
-  async function handleGoogleLogin() {
-    const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md space-y-8 rounded-lg bg-white p-8 shadow">
@@ -91,20 +81,6 @@ export default function LoginPage() {
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
         </form>
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-300" />
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="bg-white px-2 text-gray-500">ou</span>
-          </div>
-        </div>
-        <button
-          onClick={handleGoogleLogin}
-          className="w-full rounded border border-gray-300 bg-white px-4 py-2 text-gray-700 hover:bg-gray-50"
-        >
-          Entrar com Google
-        </button>
         <p className="text-center text-sm text-gray-600">
           Não tem conta?{' '}
           <Link href="/signup" className="text-blue-600 hover:underline">
