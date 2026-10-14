@@ -20,12 +20,14 @@ CREATE OR REPLACE TRIGGER organizations_updated_at
     EXECUTE FUNCTION public.set_updated_at();
 
 -- RLS: super_admin tem acesso total; membros leem própria org
+DROP POLICY IF EXISTS "super_admin_full_access_organizations" ON public.organizations;
 CREATE POLICY "super_admin_full_access_organizations"
     ON public.organizations
     FOR ALL
     USING (public.is_super_admin(auth.uid()))
     WITH CHECK (public.is_super_admin(auth.uid()));
 
+DROP POLICY IF EXISTS "members_read_own_organization" ON public.organizations;
 CREATE POLICY "members_read_own_organization"
     ON public.organizations
     FOR SELECT

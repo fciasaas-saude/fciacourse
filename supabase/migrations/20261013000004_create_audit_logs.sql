@@ -18,10 +18,10 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
 
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Índices para consultas por org e por entidade
-CREATE INDEX idx_audit_logs_org_created ON public.audit_logs(organization_id, created_at DESC);
-CREATE INDEX idx_audit_logs_entity ON public.audit_logs(entity_type, entity_id);
-CREATE INDEX idx_audit_logs_user ON public.audit_logs(user_id, created_at DESC);
+-- Índices para consultas por org e por entidade (idempotente)
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_created ON public.audit_logs(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON public.audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON public.audit_logs(user_id, created_at DESC);
 
 -- =============================================================================
 -- RLS: APENAS SELECT e INSERT para papéis comuns
@@ -29,16 +29,19 @@ CREATE INDEX idx_audit_logs_user ON public.audit_logs(user_id, created_at DESC);
 -- =============================================================================
 
 -- super_admin lê tudo
+DROP POLICY IF EXISTS "super_admin_view_all_audit_logs" ON public.audit_logs;
 CREATE POLICY "super_admin_view_all_audit_logs"
     ON public.audit_logs FOR SELECT
     USING (public.is_super_admin(auth.uid()));
 
 -- Membros leem logs da própria org
+DROP POLICY IF EXISTS "members_view_own_org_audit_logs" ON public.audit_logs;
 CREATE POLICY "members_view_own_org_audit_logs"
     ON public.audit_logs FOR SELECT
     USING (public.is_member_of_org(auth.uid(), organization_id));
 
 -- service_account insere logs na própria org
+DROP POLICY IF EXISTS "service_account_insert_audit_logs" ON public.audit_logs;
 CREATE POLICY "service_account_insert_audit_logs"
     ON public.audit_logs FOR INSERT
     WITH CHECK (
@@ -52,11 +55,13 @@ CREATE POLICY "service_account_insert_audit_logs"
     );
 
 -- Membros podem inserir logs na própria org (ações do usuário)
+DROP POLICY IF EXISTS "members_insert_own_org_audit_logs" ON public.audit_logs;
 CREATE POLICY "members_insert_own_org_audit_logs"
     ON public.audit_logs FOR INSERT
     WITH CHECK (public.is_member_of_org(auth.uid(), organization_id));
 
 -- super_admin pode gerenciar registros excepcionais se necessário
+DROP POLICY IF EXISTS "super_admin_manage_audit_logs" ON public.audit_logs;
 CREATE POLICY "super_admin_manage_audit_logs"
     ON public.audit_logs FOR ALL
     USING (public.is_super_admin(auth.uid()))
