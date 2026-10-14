@@ -2,14 +2,20 @@
 -- Fase 1 — Fundação segura e isolada
 -- Cria fila de jobs persistente em Postgres
 
-CREATE TYPE public.job_status AS ENUM (
-    'queued',
-    'running',
-    'retrying',
-    'completed',
-    'failed',
-    'cancelled'
-);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'job_status' AND typnamespace = 'public'::regnamespace) THEN
+        CREATE TYPE public.job_status AS ENUM (
+            'queued',
+            'running',
+            'retrying',
+            'completed',
+            'failed',
+            'cancelled'
+        );
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS public.ai_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -33,10 +39,10 @@ CREATE TABLE IF NOT EXISTS public.ai_jobs (
 ALTER TABLE public.ai_jobs ENABLE ROW LEVEL SECURITY;
 
 -- Índices para polling do worker e consultas por org
-CREATE INDEX idx_ai_jobs_status_created ON public.ai_jobs(status, created_at)
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_status_created ON public.ai_jobs(status, created_at)
     WHERE status IN ('queued', 'retrying');
-CREATE INDEX idx_ai_jobs_org ON public.ai_jobs(organization_id);
-CREATE INDEX idx_ai_jobs_idempotency ON public.ai_jobs(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_org ON public.ai_jobs(organization_id);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_idempotency ON public.ai_jobs(idempotency_key);
 
 -- Trigger updated_at
 CREATE OR REPLACE TRIGGER ai_jobs_updated_at
@@ -45,6 +51,7 @@ CREATE OR REPLACE TRIGGER ai_jobs_updated_at
     EXECUTE FUNCTION public.set_updated_at();
 
 -- RLS: membros leem jobs da própria org; super_admin lê tudo; service_account gerencia
+DROP POLICY IF EXISTS "members_view_own_org_jobs" ON public.ai_jobs;
 CREATE POLICY "members_view_own_org_jobs"
     ON public.ai_jobs FOR SELECT
     USING (
@@ -52,11 +59,13 @@ CREATE POLICY "members_view_own_org_jobs"
         OR public.is_super_admin(auth.uid())
     );
 
+DROP POLICY IF EXISTS "super_admin_manage_all_jobs" ON public.ai_jobs;
 CREATE POLICY "super_admin_manage_all_jobs"
     ON public.ai_jobs FOR ALL
     USING (public.is_super_admin(auth.uid()))
     WITH CHECK (public.is_super_admin(auth.uid()));
 
+DROP POLICY IF EXISTS "service_account_manage_jobs" ON public.ai_jobs;
 CREATE POLICY "service_account_manage_jobs"
     ON public.ai_jobs FOR ALL
     USING (
@@ -76,6 +85,7 @@ CREATE POLICY "service_account_manage_jobs"
         )
     );
 
+DROP POLICY IF EXISTS "members_insert_own_org_jobs" ON public.ai_jobs;
 CREATE POLICY "members_insert_own_org_jobs"
     ON public.ai_jobs FOR INSERT
     WITH CHECK (

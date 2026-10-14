@@ -3,17 +3,23 @@
 -- Cria perfis, papéis multi-tenant e funções auxiliares de RLS
 -- DEPENDÊNCIA: set_updated_at() já existe via 20261013000000_create_utilities.sql
 
--- Enum de papéis do Course Engine
-CREATE TYPE public.app_role AS ENUM (
-    'super_admin',
-    'content_director',
-    'editor',
-    'researcher',
-    'client_admin',
-    'client_reviewer',
-    'student',
-    'service_account'
-);
+-- Enum de papéis do Course Engine (idempotente)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'app_role' AND typnamespace = 'public'::regnamespace) THEN
+        CREATE TYPE public.app_role AS ENUM (
+            'super_admin',
+            'content_director',
+            'editor',
+            'researcher',
+            'client_admin',
+            'client_reviewer',
+            'student',
+            'service_account'
+        );
+    END IF;
+END
+$$;
 
 -- Perfis vinculados ao auth.users
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -127,27 +133,28 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.handle_new_user() TO authenticated;
 
 -- =============================================================================
--- RLS: profiles
+-- RLS: profiles (idempotente com DROP POLICY IF EXISTS)
 -- =============================================================================
+DROP POLICY IF EXISTS "users_view_own_profile" ON public.profiles;
 CREATE POLICY "users_view_own_profile"
     ON public.profiles FOR SELECT
     USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "users_update_own_profile" ON public.profiles;
 CREATE POLICY "users_update_own_profile"
     ON public.profiles FOR UPDATE
     USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "super_admin_view_all_profiles" ON public.profiles;
 CREATE POLICY "super_admin_view_all_profiles"
     ON public.profiles FOR SELECT
     USING (public.is_super_admin(auth.uid()));
 
 -- =============================================================================
--- RLS: organization_members
--- REGRA CRÍTICA: usuários comuns NÃO podem criar sua própria membership.
--- Apenas super_admin ou service_account pode inserir em organization_members.
+-- RLS: organization_members (idempotente com DROP POLICY IF EXISTS)
 -- =============================================================================
 
--- Leitura: membros veem outros membros da própria org; super_admin vê tudo
+DROP POLICY IF EXISTS "members_view_own_org_members" ON public.organization_members;
 CREATE POLICY "members_view_own_org_members"
     ON public.organization_members FOR SELECT
     USING (
@@ -155,11 +162,12 @@ CREATE POLICY "members_view_own_org_members"
         OR public.is_super_admin(auth.uid())
     );
 
--- Inserção: APENAS super_admin ou service_account (NÃO o próprio usuário)
+DROP POLICY IF EXISTS "super_admin_insert_org_members" ON public.organization_members;
 CREATE POLICY "super_admin_insert_org_members"
     ON public.organization_members FOR INSERT
     WITH CHECK (public.is_super_admin(auth.uid()));
 
+DROP POLICY IF EXISTS "service_account_insert_org_members" ON public.organization_members;
 CREATE POLICY "service_account_insert_org_members"
     ON public.organization_members FOR INSERT
     WITH CHECK (
@@ -171,19 +179,20 @@ CREATE POLICY "service_account_insert_org_members"
         )
     );
 
--- Atualização: APENAS super_admin (nenhum usuário pode se promover)
+DROP POLICY IF EXISTS "super_admin_update_org_members" ON public.organization_members;
 CREATE POLICY "super_admin_update_org_members"
     ON public.organization_members FOR UPDATE
     USING (public.is_super_admin(auth.uid()))
     WITH CHECK (public.is_super_admin(auth.uid()));
 
--- Deleção: APENAS super_admin
+DROP POLICY IF EXISTS "super_admin_delete_org_members" ON public.organization_members;
 CREATE POLICY "super_admin_delete_org_members"
     ON public.organization_members FOR DELETE
     USING (public.is_super_admin(auth.uid()));
 
 -- Trigger on_auth_user_created (reaproveita handle_new_user)
-CREATE OR REPLACE TRIGGER on_auth_user_created
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW
     EXECUTE FUNCTION public.handle_new_user();
