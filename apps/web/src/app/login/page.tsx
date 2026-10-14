@@ -93,6 +93,11 @@ export default function LoginPage() {
           >
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
+          <p className="text-center text-sm">
+            <Link href="/forgot-password" className="text-blue-600 hover:underline">
+              Esqueci minha senha
+            </Link>
+          </p>
         </form>
         {googleOAuthEnabled && (
           <>

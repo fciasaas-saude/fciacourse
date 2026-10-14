@@ -33,22 +33,19 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/signup') &&
-    !request.nextUrl.pathname.startsWith('/auth')
-  ) {
+  const publicPaths = ['/login', '/signup', '/auth', '/forgot-password'];
+  const isPublic = publicPaths.some((p) => request.nextUrl.pathname.startsWith(p));
+
+  if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
-  if (
-    user &&
-    (request.nextUrl.pathname.startsWith('/login') ||
-      request.nextUrl.pathname.startsWith('/signup'))
-  ) {
+  // Redirect logged-in users away from login/signup, but NOT from reset-password
+  // (they arrive there authenticated via recovery link and need to set new password)
+  const authOnlyPaths = ['/login', '/signup'];
+  if (user && authOnlyPaths.some((p) => request.nextUrl.pathname.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';
     return NextResponse.redirect(url);
