@@ -17,10 +17,11 @@ BEGIN
 END;
 $$;
 
--- Revogar execução pública para evitar uso indevido fora de triggers
+-- Revogar execução pública e de authenticated para impedir invocação direta pelo frontend.
+-- A função é executada apenas internamente por triggers (SECURITY DEFINER),
+-- que rodam com privilégios do dono da função, não do usuário autenticado.
 REVOKE EXECUTE ON FUNCTION public.set_updated_at() FROM PUBLIC;
--- Conceder apenas para authenticated (necessário para triggers em tabelas com RLS)
-GRANT EXECUTE ON FUNCTION public.set_updated_at() TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.set_updated_at() FROM authenticated;
 
 COMMENT ON FUNCTION public.set_updated_at() IS
-'Utility trigger function: sets updated_at to now(). SECURITY DEFINER with fixed search_path. Used by organizations, profiles, ai_jobs triggers. NOT for audit_logs (append-only).';
+'INTERNAL ONLY — Utility trigger function: sets updated_at to now(). SECURITY DEFINER with fixed search_path. Used by organizations, profiles, ai_jobs triggers. NOT for audit_logs (append-only). NOT a public API — EXECUTE revoked from authenticated and PUBLIC. Triggers execute this server-side via SECURITY DEFINER.';
