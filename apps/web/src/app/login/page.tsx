@@ -6,12 +6,25 @@ import { createClient } from '@/lib/supabase/client';
 import { loginSchema } from '@/lib/validations/auth';
 import Link from 'next/link';
 
+const googleOAuthEnabled =
+  process.env.NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH === 'true';
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  async function handleGoogleLogin() {
+    const supabase = createClient();
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -81,6 +94,24 @@ export default function LoginPage() {
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
         </form>
+        {googleOAuthEnabled && (
+          <>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-300" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="bg-white px-2 text-gray-500">ou</span>
+              </div>
+            </div>
+            <button
+              onClick={handleGoogleLogin}
+              className="w-full rounded border border-gray-300 bg-white px-4 py-2 text-gray-700 hover:bg-gray-50"
+            >
+              Entrar com Google
+            </button>
+          </>
+        )}
         <p className="text-center text-sm text-gray-600">
           Não tem conta?{' '}
           <Link href="/signup" className="text-blue-600 hover:underline">
