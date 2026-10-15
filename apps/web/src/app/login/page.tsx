@@ -117,13 +117,7 @@ export default function LoginPage() {
             </button>
           </>
         )}
-        <p className="text-center text-sm text-gray-600">
-          Não tem conta?{' '}
-          <Link href="/signup" className="text-blue-600 hover:underline">
-            Cadastre-se
-          </Link>
-        </p>
-      </div>
+        </div>
     </div>
   );
 }
