@@ -1,7 +1,6 @@
 'use client';
-
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { checkEmailExists, sendPasswordResetEmail } from './actions';
 import Link from 'next/link';
 
 export default function ForgotPasswordPage() {
@@ -22,19 +21,34 @@ export default function ForgotPasswordPage() {
       return;
     }
 
-    const supabase = createClient();
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-    });
+    // Passo 1: Verificar se o email existe no Supabase
+    const checkResult = await checkEmailExists(email.trim().toLowerCase());
 
-    if (resetError && resetError.status === 429) {
-      setError('Muitas solicitações. Tente novamente em alguns minutos.');
-    } else {
-      // Anti-enumeration: always show neutral message regardless of email existence
-      setMessage(
-        'Se este e-mail estiver cadastrado, enviamos um link para redefinir sua senha. Verifique sua caixa de entrada e spam.'
-      );
+    if (checkResult.error) {
+      setError(`Erro ao verificar email: ${checkResult.error}`);
+      setLoading(false);
+      return;
     }
+
+    if (!checkResult.exists) {
+      setError('Este email não está cadastrado na plataforma. Verifique o endereço ou crie uma conta.');
+      setLoading(false);
+      return;
+    }
+
+    // Passo 2: Email existe — enviar link de recuperação
+    const redirectTo = `${window.location.origin}/auth/callback?next=/reset-password`;
+    const sendResult = await sendPasswordResetEmail(email.trim().toLowerCase(), redirectTo);
+
+    if (!sendResult.success) {
+      setError(sendResult.error ?? 'Erro ao enviar email de recuperação.');
+      setLoading(false);
+      return;
+    }
+
+    setMessage(
+      'Email encontrado! Enviamos um link para redefinir sua senha. Verifique sua caixa de entrada e spam.'
+    );
     setLoading(false);
   }
 
@@ -42,11 +56,9 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md space-y-8 rounded-lg bg-white p-8 shadow">
         <h1 className="text-center text-2xl font-bold text-gray-900">Recuperar senha</h1>
-
         {error && (
           <div className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
         )}
-
         {message ? (
           <div className="space-y-4 text-center">
             <div className="rounded bg-green-50 p-4 text-sm text-green-700">{message}</div>
@@ -73,13 +85,12 @@ export default function ForgotPasswordPage() {
                   required
                 />
               </div>
-
               <button
                 type="submit"
                 disabled={loading}
                 className="w-full rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {loading ? 'Enviando...' : 'Enviar link de recuperação'}
+                {loading ? 'Verificando...' : 'Enviar link de recuperação'}
               </button>
             </form>
             <p className="text-center text-sm text-gray-600">
