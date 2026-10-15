@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
@@ -12,6 +12,26 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [hasRecoverySession, setHasRecoverySession] = useState(false);
+
+  useEffect(() => {
+    // Check if user arrived via recovery link (Supabase sets session automatically)
+    async function checkSession() {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (session) {
+        setHasRecoverySession(true);
+      } else {
+        // No session - user may have arrived directly without clicking email link
+        setError('Sessão de recuperação não encontrada. Clique no link enviado por email para redefinir sua senha.');
+      }
+      setCheckingSession(false);
+    }
+
+    checkSession();
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,8 +49,9 @@ export default function ResetPasswordPage() {
     }
 
     setLoading(true);
-
     const supabase = createClient();
+
+    // updateUser works when user has a valid recovery session
     const { error: updateError } = await supabase.auth.updateUser({ password });
 
     if (updateError) {
@@ -42,6 +63,16 @@ export default function ResetPasswordPage() {
       }, 2000);
     }
     setLoading(false);
+  }
+
+  if (checkingSession) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md rounded-lg bg-white p-8 shadow text-center">
+          <p className="text-sm text-gray-600">Verificando sessão de recuperação...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -62,8 +93,11 @@ export default function ResetPasswordPage() {
               Ir para dashboard
             </Link>
           </div>
-        ) : (
+        ) : hasRecoverySession ? (
           <form onSubmit={handleSubmit} className="space-y-4">
+            <p className="text-center text-sm text-gray-600">
+              Digite sua nova senha abaixo.
+            </p>
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                 Nova senha
@@ -78,7 +112,6 @@ export default function ResetPasswordPage() {
                 required
               />
             </div>
-
             <div>
               <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
                 Confirmar nova senha
@@ -93,7 +126,6 @@ export default function ResetPasswordPage() {
                 required
               />
             </div>
-
             <button
               type="submit"
               disabled={loading}
@@ -102,9 +134,15 @@ export default function ResetPasswordPage() {
               {loading ? 'Redefinindo...' : 'Redefinir senha'}
             </button>
           </form>
+        ) : (
+          <div className="text-center">
+            <Link href="/forgot-password" className="text-sm text-blue-600 hover:underline">
+              Solicitar novo link de recuperação
+            </Link>
+          </div>
         )}
 
-        {!success && (
+        {!success && hasRecoverySession && (
           <p className="text-center text-sm text-gray-600">
             <Link href="/login" className="text-blue-600 hover:underline">
               Voltar para login
