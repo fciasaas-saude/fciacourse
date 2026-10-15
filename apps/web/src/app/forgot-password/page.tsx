@@ -31,7 +31,7 @@ export default function ForgotPasswordPage() {
     }
 
     if (!checkResult.exists) {
-      setError('Este email não está cadastrado na plataforma. Verifique o endereço ou crie uma conta.');
+      setError('Este e-mail não está cadastrado na plataforma. Verifique o endereço digitado ou entre em contato com o suporte/administrador.');
       setLoading(false);
       return;
     }
