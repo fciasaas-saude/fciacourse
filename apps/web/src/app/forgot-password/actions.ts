@@ -15,30 +15,55 @@ export async function checkEmailExists(email: string): Promise<{ exists: boolean
     return { exists: false, error: 'Configuração de servidor incompleta (SUPABASE_SERVICE_ROLE_KEY).' };
   }
 
-  // Usar fetch direto à Admin API do Supabase para listar usuários por email
-  // Isso evita expor a service role key no client-side
-  try {
-    const response = await fetch(
-      `${supabaseUrl}/auth/v1/admin/users?page=1&per_page=1&filter=email.eq.${encodeURIComponent(email)}`,
-      {
-        headers: {
-          apikey: serviceRoleKey,
-          Authorization: `Bearer ${serviceRoleKey}`,
-          'Content-Type': 'application/json',
-        },
-        cache: 'no-store',
-      }
-    );
+  const normalizedEmail = email.trim().toLowerCase();
 
-    if (!response.ok) {
-      return { exists: false, error: `Erro ao verificar email (${response.status}).` };
+  try {
+    // A Admin API do Supabase não suporta filter=email.eq.X diretamente.
+    // Estratégia: paginar usuários e buscar por email normalizado client-side.
+    // Para bases pequenas (< 1000 usuários), uma única página basta.
+    let page = 1;
+    const perPage = 100;
+    let found = false;
+
+    while (!found) {
+      const response = await fetch(
+        `${supabaseUrl}/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
+        {
+          headers: {
+            apikey: serviceRoleKey,
+            Authorization: `Bearer ${serviceRoleKey}`,
+            'Content-Type': 'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+
+      if (!response.ok) {
+        return { exists: false, error: `Erro ao verificar email (${response.status}).` };
+      }
+
+      const data = await response.json();
+      const users: Array<{ email?: string }> = data.users ?? data ?? [];
+
+      if (!Array.isArray(users) || users.length === 0) {
+        break;
+      }
+
+      found = users.some((u) => u.email?.toLowerCase() === normalizedEmail);
+
+      if (users.length < perPage) {
+        break;
+      }
+
+      page++;
+
+      // Segurança: limitar a 10 páginas (1000 usuários) para evitar loops infinitos
+      if (page > 10) {
+        break;
+      }
     }
 
-    const data = await response.json();
-    const users = data.users ?? data;
-    const exists = Array.isArray(users) && users.length > 0;
-
-    return { exists };
+    return { exists: found };
   } catch (err) {
     return { exists: false, error: (err as Error).message };
   }
