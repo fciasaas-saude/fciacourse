@@ -1,113 +1,95 @@
-import { getSources } from './actions';
-import { SyncDriveButton } from './sync-drive-button';
-import Link from 'next/link';
-
-const sourceTypeLabels: Record<string, string> = {
-  book: 'Livro',
-  article: 'Artigo',
-  report: 'Relatório',
-  video: 'Vídeo',
-  podcast: 'Podcast',
-  internal_document: 'Doc. Interno',
-  legislation: 'Legislação',
-  other: 'Outro',
-};
-
-const rightsLabels: Record<string, string> = {
-  public_domain: 'Domínio Público',
-  creative_commons: 'Creative Commons',
-  licensed: 'Licenciado',
-  fair_use: 'Fair Use',
-  proprietary: 'Proprietário',
-  pending_review: 'Pendente',
-};
+﻿import { createClient } from '../../../utils/supabase/server'
+import { redirect } from 'next/navigation'
+import { SyncButton } from './sync-button'
+import { MetricsCards } from './metrics-cards'
+import { SourcesTable } from './sources-table'
+import { BookOpen } from 'lucide-react'
 
 export default async function SourcesPage() {
-  const { sources, error } = await getSources();
+  const supabase = await createClient()
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Biblioteca de Fontes</h1>
-        <div className="flex items-center gap-3">
-          <SyncDriveButton />
-          <Link
-            href="/dashboard/sources/new"
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-          >
-            Nova Fonte
-          </Link>
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) {
+    redirect('/login')
+  }
+
+  // Buscar organizaÃ§Ã£o do usuÃ¡rio
+  const { data: memberData } = await supabase
+    .from('organization_members')
+    .select('organization_id')
+    .eq('user_id', user.id)
+    .single()
+
+  if (!memberData?.organization_id) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900">Nenhuma organizaÃ§Ã£o encontrada</h2>
+          <p className="mt-2 text-gray-600">Entre em contato com o administrador.</p>
         </div>
       </div>
+    )
+  }
 
-      {error && (
-        <div className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
-      )}
+  const organizationId = memberData.organization_id
 
-      {!error && sources.length === 0 && (
-        <div className="rounded border border-dashed border-gray-300 p-8 text-center text-gray-500">
-          Nenhuma fonte cadastrada ainda. Adicione a primeira!
+  // Buscar estatÃ­sticas
+  const { count: totalCount } = await supabase
+    .from('knowledge_sources')
+    .select('*', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+
+  const { count: completedCount } = await supabase
+    .from('knowledge_sources')
+    .select('*', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('processing_status', 'completed')
+
+  const { count: pendingCount } = await supabase
+    .from('knowledge_sources')
+    .select('*', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .in('processing_status', ['pending', 'processing'])
+
+  const { count: reviewCount } = await supabase
+    .from('knowledge_sources')
+    .select('*', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('rights_status', 'pending_review')
+
+  // Buscar fontes
+  const { data: sources } = await supabase
+    .from('knowledge_sources')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false })
+
+  return (
+    <div className="space-y-8 p-8">
+      {/* CabeÃ§alho */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+            <BookOpen className="h-8 w-8 text-blue-600" />
+            Biblioteca de Conhecimento
+          </h1>
+          <p className="mt-2 text-gray-600">
+            Fontes de consulta, livros e documentos sincronizados do Google Drive para geraÃ§Ã£o pedagÃ³gica.
+          </p>
         </div>
-      )}
+        <SyncButton organizationId={organizationId} />
+      </div>
 
-      {sources.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Título
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Tipo
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Autor
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Direitos
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {sources.map((s) => (
-                <tr key={s.id} className="hover:bg-gray-50">
-                  <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-900">
-                    {s.title}
-                  </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                    {sourceTypeLabels[s.source_type] ?? s.source_type}
-                  </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                    {s.author ?? '—'}
-                  </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                    {rightsLabels[s.rights_status] ?? s.rights_status}
-                  </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold leading-5 ${
-                        s.processing_status === 'completed'
-                          ? 'bg-green-100 text-green-800'
-                          : s.processing_status === 'failed'
-                          ? 'bg-red-100 text-red-800'
-                          : s.processing_status === 'needs_review'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}
-                    >
-                      {s.processing_status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Cards de MÃ©tricas */}
+      <MetricsCards
+        total={totalCount || 0}
+        completed={completedCount || 0}
+        pending={pendingCount || 0}
+        review={reviewCount || 0}
+      />
+
+      {/* Tabela de Fontes */}
+      <SourcesTable sources={sources || []} />
     </div>
-  );
+  )
 }
