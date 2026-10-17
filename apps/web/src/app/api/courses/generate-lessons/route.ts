@@ -1,5 +1,6 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
 
 const AI_GATEWAY_URL = "https://iron-cody-api.fly.dev/v1/chat/completions";
 
@@ -19,23 +20,45 @@ function getKeywordsForModule(title: string): string[] {
 
 export async function POST(req: NextRequest) {
   try {
+    // --- BLINDAGEM DE SEGURANÇA ---
+    const authSupabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL as string,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string,
+      {
+        cookies: {
+          get(name: string) {
+            return req.cookies.get(name)?.value;
+          },
+        },
+      }
+    );
+
+    const { data: { user }, error: authError } = await authSupabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Acesso negado. Usuário não autenticado ou sessão expirada." },
+        { status: 401 }
+      );
+    }
+    // ------------------------------
+
     const body = await req.json().catch(() => ({}));
     const { course_id, module_id } = body;
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const aiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
 
     if (!supabaseUrl || !serviceKey || !aiKey) {
       return NextResponse.json(
-        { error: "Variáveis de ambiente (Supabase ou AI Key) ausentes." },
+        { error: "Variáveis de ambiente ausentes." },
         { status: 500 }
       );
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Consulta os módulos alvos
     let query = supabase
       .from("course_modules")
       .select("id, module_number, title, description, learning_objective, course_id")
@@ -55,7 +78,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Busca quais módulos já possuem versão gerada
     const moduleIds = modules.map((m) => m.id);
     const { data: existingVersions } = await supabase
       .from("module_versions")
@@ -73,7 +95,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const systemPrompt = `Você é o Redator Pedagógico Master da FCIA Academy.
+    const systemPrompt = `Você é o Redator Pedagógico Master do FCIA Course.
 Seu objetivo é transformar as diretrizes do módulo e os trechos de referência (RAG) em uma aula prática, densa, sem enrolação e pronta para consumo executivo.
 A resposta deve ser em formato JSON puro com duas chaves obrigatórias:
 1. "markdown": Uma aula completa estruturada em Markdown (Introdução, Conceito Central, Aplicação Prática no Mercado, Estudo de Caso Rápido, Checklist de Ação).
@@ -82,6 +104,7 @@ A resposta deve ser em formato JSON puro com duas chaves obrigatórias:
 Sem tags markdown fora do JSON.`;
 
     const results = [];
+    const errorsLog = [];
 
     for (const mod of pendingModules) {
       const keywords = getKeywordsForModule(mod.title);
@@ -112,14 +135,7 @@ Sem tags markdown fora do JSON.`;
         .map((c, i) => `--- TRECHO ${i + 1} (Chunk #${c.chunk_index}) ---\n${c.content}`)
         .join("\n\n");
 
-      const userPrompt = `MÓDULO: ${mod.title}
-OBJETIVO DE APRENDIZAGEM: ${mod.learning_objective}
-DESCRIÇÃO: ${mod.description}
-
-MATERIAL DE REFERÊNCIA ORIGINAL DO LIVRO (RAG):
-${ragContext}
-
-Redija a aula executiva baseada nessas fontes.`;
+      const userPrompt = `MÓDULO: ${mod.title}\nOBJETIVO: ${mod.learning_objective}\nDESCRIÇÃO: ${mod.description}\n\nRAG:\n${ragContext}\n\nRedija a aula executiva.`;
 
       const aiResponse = await fetch(AI_GATEWAY_URL, {
         method: "POST",
@@ -141,13 +157,17 @@ Redija a aula executiva baseada nessas fontes.`;
       const aiData = await aiResponse.json();
       const rawContent = aiData.choices?.[0]?.message?.content;
 
-      if (!rawContent) continue;
+      if (!rawContent) {
+        errorsLog.push({ module: mod.title, reason: "Resposta vazia." });
+        continue;
+      }
 
       const cleanJson = rawContent.replace(/```json/gi, "").replace(/```/g, "").trim();
       let generatedData;
       try {
         generatedData = JSON.parse(cleanJson);
-      } catch {
+      } catch (err) {
+        errorsLog.push({ module: mod.title, reason: "Falha ao analisar JSON da IA." });
         continue;
       }
 
@@ -173,13 +193,13 @@ Redija a aula executiva baseada nessas fontes.`;
         .select("id, module_id, status")
         .single();
 
-      if (!errSave && savedVersion) {
+      if (errSave || !savedVersion) {
+        errorsLog.push({ module: mod.title, reason: `Erro DB: ${errSave?.message}` });
+      } else {
         results.push({
           module_id: mod.id,
-          module_number: mod.module_number,
           title: mod.title,
           version_id: savedVersion.id,
-          lessons_count: generatedData.lessons?.length || 0,
         });
       }
     }
@@ -188,6 +208,7 @@ Redija a aula executiva baseada nessas fontes.`;
       success: true,
       processed_count: results.length,
       modules: results,
+      errors: errorsLog.length > 0 ? errorsLog : undefined,
     });
   } catch (error: any) {
     return NextResponse.json(
