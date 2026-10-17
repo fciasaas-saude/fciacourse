@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -21,7 +21,7 @@ export default function LoginPage() {
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: ${window.location.origin}/auth/callback,
       },
     });
   }
@@ -65,13 +65,12 @@ export default function LoginPage() {
               Email
             </label>
             <input
-             <input
-  id="email"
-  type="email"
-  value={email}
-  onChange={(e) => setEmail(e.target.value)}
-  className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-gray-900 bg-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-    required
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-gray-900 bg-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              required
             />
           </div>
           <div>
@@ -79,13 +78,12 @@ export default function LoginPage() {
               Senha
             </label>
             <input
-             <input
-  id="password"
-  type="password"
-  value={password}
-  onChange={(e) => setPassword(e.target.value)}
-  className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-gray-900 bg-white font-bold text-lg focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-    required
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-gray-900 bg-white font-bold text-lg focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              required
             />
           </div>
           <button
